@@ -1,7 +1,7 @@
+import argparse
 import grpc
 from concurrent import futures
 import numpy as np
-
 import matrix_pb2
 import matrix_pb2_grpc
 
@@ -21,7 +21,17 @@ class MatrixService(matrix_pb2_grpc.MatrixServiceServicer):
         start = request.start_row
         end = request.end_row
 
+        peer = None
+        try:
+            peer = context.peer()
+        except Exception:
+            peer = "unknown"
+
+        print(f"Worker received request from {peer} for rows {start}:{end}")
+
         partial = A[start:end] @ B
+
+        print(f"Worker computing rows {start}:{end}, result shape {partial.shape}")
 
         return matrix_pb2.MatrixReply(
             result=partial.flatten().tolist(),
@@ -40,8 +50,15 @@ def serve(port):
     server.start()
 
     print(f"Worker running on port {port}")
-    server.wait_for_termination()
+    try:
+        server.wait_for_termination()
+    except KeyboardInterrupt:
+        print("Shutting down worker")
 
 
 if __name__ == "__main__":
-    serve(50053)
+    parser = argparse.ArgumentParser(description="Matrix worker server")
+    parser.add_argument("--port", type=int, default=50051, help="Port to listen on")
+    args = parser.parse_args()
+
+    serve(args.port)
