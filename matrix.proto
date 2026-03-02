@@ -18,4 +18,5 @@ message MatrixReply {
   repeated double result = 1;
   int32 rows = 2;
   int32 cols = 3;
+  int64 computation_time_ms = 4;
 }

@@ -4,6 +4,36 @@ import numpy as np
 import matrix_pb2
 import matrix_pb2_grpc
 import time
+import threading
+
+
+def probe_workers(workers, timeout=2):
+    """
+    Check which workers are actually available.
+    Returns tuple: (available_workers, unavailable_workers)
+    """
+    available = []
+    unavailable = []
+    
+    def check_worker(w):
+        try:
+            channel = grpc.insecure_channel(w)
+            grpc.channel_ready_future(channel).result(timeout=timeout)
+            channel.close()
+            available.append(w)
+        except Exception:
+            unavailable.append(w)
+    
+    threads = []
+    for w in workers:
+        t = threading.Thread(target=check_worker, args=(w,))
+        t.start()
+        threads.append(t)
+    
+    for t in threads:
+        t.join()
+    
+    return available, unavailable
 
 
 def get_matrix_from_user():
@@ -54,49 +84,87 @@ def get_matrix_from_user():
     return A, B
 
 
-def compute_distributed(A, B, workers, retries=2, rpc_timeout=5):
+def compute_distributed(A, B, workers, retries=3, rpc_timeout=10):
+    """
+    Distributed matrix multiplication with self-sustainable fault tolerance.
+    Works with any number of available workers (1 or more).
+    """
+    overall_start = time.time()
     rows = A.shape[0]
+    
     if rows == 0:
-        return np.empty((0, B.shape[1]))
-
-    # create chunks: split into roughly len(workers) chunks
-    nchunks = min(rows, max(1, len(workers)))
-    chunk_size = rows // nchunks
+        return np.empty((0, B.shape[1])), {}
+    
+    print("\n" + "="*80)
+    print("CHECKING WORKER AVAILABILITY")
+    print("="*80)
+    print(f"Probing {len(workers)} workers: {workers}")
+    
+    # Probe for available workers
+    available_workers, unavailable_workers = probe_workers(workers)
+    
+    print(f"\n✓ Available workers ({len(available_workers)}): {available_workers}")
+    if unavailable_workers:
+        print(f"✗ Unavailable workers ({len(unavailable_workers)}): {unavailable_workers}")
+    
+    if not available_workers:
+        raise RuntimeError(f"No workers available! All workers are down: {workers}")
+    
+    print(f"\nProceeding with {len(available_workers)} available worker(s)")
+    print("="*80 + "\n")
+    
+    # Dynamic chunk creation based on available workers only
+    active_workers = available_workers
+    num_workers = len(active_workers)
+    nchunks = min(rows, max(1, num_workers))
+    
+    # Create chunks
     chunks = []
+    chunk_size = rows // nchunks
+    remainder = rows % nchunks
+    
     start = 0
-    while start < rows:
+    for i in range(nchunks):
         end = start + chunk_size
-        # ensure last chunk reaches the end
-        if end >= rows:
-            end = rows
+        if i < remainder:  # Distribute remainder rows
+            end += 1
         chunks.append((start, end))
         start = end
-
-    # if chunk_size was 0 (fewer rows than workers), fix by making single-row chunks
-    if any(s == e for s, e in chunks):
-        chunks = [(i, i + 1) for i in range(rows)]
-
+    
+    print(f"Total rows to compute: {rows}")
+    print(f"Active workers: {num_workers}")
+    print(f"Chunks created: {len(chunks)}")
+    print(f"Initial distribution:")
+    for idx, (s, e) in enumerate(chunks):
+        row_list = ", ".join(str(i) for i in range(s, e))
+        assigned_worker = active_workers[idx % len(active_workers)]
+        print(f"  Chunk {idx+1}: Rows {row_list} → {assigned_worker}")
+    print()
+    
     results = {}
-    alive = {w: True for w in workers}
     handled_by = {}
-
-    for idx, (start, end) in enumerate(chunks):
+    worker_times = {}
+    failed_chunks = []
+    
+    # Process each chunk with fault tolerance
+    for chunk_idx, (start, end) in enumerate(chunks):
         success = False
         last_err = None
-        preferred = workers[idx % len(workers)]
-
+        
+        # Try to assign to a worker (with retries and fallback)
         for attempt in range(retries + 1):
-            # try preferred first, then others
-            worker_order = [preferred] + [w for w in workers if w != preferred]
+            # Get list of workers to try (rotate through available ones)
+            worker_order = [active_workers[(chunk_idx + attempt + i) % len(active_workers)] 
+                          for i in range(len(active_workers))]
+            
             for w in worker_order:
-                if not alive.get(w, False):
-                    continue
-
                 try:
+                    chunk_send_start = time.time()
                     channel = grpc.insecure_channel(w)
-                    # quick check if channel can be ready (short)
+                    
+                    # Verify worker is ready
                     grpc.channel_ready_future(channel).result(timeout=2)
-
+                    
                     stub = matrix_pb2_grpc.MatrixServiceStub(channel)
                     request = matrix_pb2.MatrixRequest(
                         start_row=start,
@@ -107,38 +175,73 @@ def compute_distributed(A, B, workers, retries=2, rpc_timeout=5):
                         colsA=A.shape[1],
                         colsB=B.shape[1],
                     )
-
+                    
                     response = stub.ComputeRows(request, timeout=rpc_timeout)
-
+                    chunk_time_ms = (time.time() - chunk_send_start) * 1000
+                    
                     part = np.array(response.result).reshape(response.rows, response.cols)
                     results[start] = part
                     handled_by[start] = (w, start, end)
-                    print(f"Computed rows {start}:{end} from {w}")
+                    
+                    # Store worker computation time
+                    worker_computation_ms = response.computation_time_ms
+                    if w not in worker_times:
+                        worker_times[w] = []
+                    
+                    row_list = ", ".join(str(i) for i in range(start, end))
+                    worker_times[w].append({
+                        'rows': (start, end),
+                        'row_list': row_list,
+                        'computation_ms': worker_computation_ms,
+                        'rpc_ms': chunk_time_ms
+                    })
+                    
+                    print(f"✓ Chunk {chunk_idx+1}: Rows {row_list}")
+                    print(f"  Worker: {w}")
+                    print(f"  Computation time: {worker_computation_ms:.2f} ms")
+                    print(f"  RPC time: {chunk_time_ms:.2f} ms\n")
+                    
                     success = True
                     break
-
+                
                 except Exception as e:
                     last_err = e
-                    print(f"Worker {w} failed for rows {start}:{end}: {e}")
-                    alive[w] = False
+                    print(f"✗ Attempt {attempt+1}: Worker {w} failed for chunk {chunk_idx+1} - {str(e)[:50]}")
                     continue
-
+            
             if success:
                 break
-            # backoff before retry
-            time.sleep(0.5 + attempt * 0.5)
-
+            
+            # Backoff before retry
+            if attempt < retries:
+                wait_time = 1 + attempt * 1.5
+                print(f"  Retrying in {wait_time:.1f} seconds...\n")
+                time.sleep(wait_time)
+        
         if not success:
-            raise RuntimeError(f"Failed to compute rows {start}:{end} after retries: {last_err}")
-
-    # assemble results by start index order
+            print(f"\n✗ FAILED: Chunk {chunk_idx+1} (Rows {row_list}) - All retries exhausted")
+            failed_chunks.append((start, end))
+    
+    # Check if all chunks were processed
+    if failed_chunks:
+        failed_info = "\n  ".join([f"Rows {s}, {', '.join(str(i) for i in range(s, e))}" 
+                                   for s, e in failed_chunks])
+        raise RuntimeError(f"Failed to compute {len(failed_chunks)} chunk(s):\n  {failed_info}")
+    
+    # Assemble results in order
     ordered = [results[s] for s in sorted(results.keys())]
-    # summary of which worker handled which chunk
-    print("\nAssignment summary:")
-    for s in sorted(handled_by.keys()):
-        w, sr, er = handled_by[s]
-        print(f"  rows {sr}:{er} -> {w}")
-    return np.vstack(ordered)
+    overall_time_ms = (time.time() - overall_start) * 1000
+    
+    timing_report = {
+        'overall_time_ms': overall_time_ms,
+        'worker_times': worker_times,
+        'handled_by': handled_by,
+        'available_workers': available_workers,
+        'unavailable_workers': unavailable_workers
+    }
+    
+    return np.vstack(ordered), timing_report
+    return np.vstack(ordered), timing_report
 
 
 def parse_workers_arg(arg):
@@ -155,10 +258,56 @@ if __name__ == "__main__":
     workers = parse_workers_arg(args.workers)
 
     A, B = get_matrix_from_user()
+    A = A.astype(int)
+    B = B.astype(int)
 
-    print("Matrix A:\n", A)
-    print("Matrix B:\n", B)
+    print("\n" + "="*80)
+    print("INPUT MATRICES")
+    print("="*80)
+    print(f"Matrix A (shape {A.shape}):\n{A}")
+    print(f"\nMatrix B (shape {B.shape}):\n{B}")
+    print("="*80 + "\n")
 
-    C = compute_distributed(A, B, workers)
+    C, timing_report = compute_distributed(A, B, workers)
 
-    print("\nDistributed Result:\n", C)
+    print("\n" + "="*80)
+    print("FINAL RESULT")
+    print("="*80)
+    print(f"Result matrix C (shape {C.shape}):\n{C.astype(int)}")
+    print("="*80 + "\n")
+
+    # Display comprehensive timing report
+    print("="*80)
+    print("COMPUTATION TIMING REPORT")
+    print("="*80)
+    
+    print(f"\nOverall computation time: {timing_report['overall_time_ms']:.2f} ms")
+    print(f"\nWorker Status:")
+    print(f"  Available: {len(timing_report['available_workers'])} - {timing_report['available_workers']}")
+    if timing_report['unavailable_workers']:
+        print(f"  Unavailable: {len(timing_report['unavailable_workers'])} - {timing_report['unavailable_workers']}")
+    
+    print(f"\nPer-Worker Statistics:")
+    print("-" * 80)
+    
+    for worker_addr in sorted(timing_report['worker_times'].keys()):
+        tasks = timing_report['worker_times'][worker_addr]
+        total_computation = sum(t['computation_ms'] for t in tasks)
+        total_rpc = sum(t['rpc_ms'] for t in tasks)
+        avg_computation = total_computation / len(tasks) if tasks else 0
+        avg_rpc = total_rpc / len(tasks) if tasks else 0
+        
+        print(f"\nWorker: {worker_addr}")
+        print(f"  Number of task(s): {len(tasks)}")
+        for i, task in enumerate(tasks):
+            row_list = task.get('row_list', ', '.join(str(r) for r in range(task['rows'][0], task['rows'][1])))
+            print(f"    Task {i+1}: Rows {row_list}")
+            print(f"      - Computation time: {task['computation_ms']:.2f} ms")
+            print(f"      - RPC roundtrip time: {task['rpc_ms']:.2f} ms")
+        print(f"  Worker Total:")
+        print(f"    - Sum computation: {total_computation:.2f} ms")
+        print(f"    - Sum RPC time: {total_rpc:.2f} ms")
+        print(f"    - Average computation per task: {avg_computation:.2f} ms")
+        print(f"    - Average RPC per task: {avg_rpc:.2f} ms")
+    
+    print("\n" + "="*80)
