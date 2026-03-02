@@ -29,9 +29,21 @@ class MatrixService(matrix_pb2_grpc.MatrixServiceServicer):
 
         print(f"Worker received request from {peer} for rows {start}:{end}")
 
-        partial = A[start:end] @ B
+        # compute row-by-row and log detailed operations
+        partial_rows = []
+        for global_row in range(start, end):
+            a_row = A[global_row]
+            row_result = []
+            print(f"Worker computing row {global_row}: A_row = {a_row.tolist()}")
+            for j in range(B.shape[1]):
+                b_col = B[:, j]
+                value = float(np.dot(a_row, b_col))
+                row_result.append(value)
+                print(f"  -> element ({global_row},{j}) = dot(A_row, B_col) = dot({a_row.tolist()}, {b_col.tolist()}) = {value}")
+            partial_rows.append(row_result)
 
-        print(f"Worker computing rows {start}:{end}, result shape {partial.shape}")
+        partial = np.array(partial_rows)
+        print(f"Worker completed rows {start}:{end}, partial result:\n{partial}")
 
         return matrix_pb2.MatrixReply(
             result=partial.flatten().tolist(),
