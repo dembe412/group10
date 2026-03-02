@@ -1,0 +1,21 @@
+syntax = "proto3";
+
+service MatrixService {
+  rpc ComputeRows (MatrixRequest) returns (MatrixReply);
+}
+
+message MatrixRequest {
+  int32 start_row = 1;
+  int32 end_row = 2;
+  repeated double matrixA = 3;
+  repeated double matrixB = 4;
+  int32 rowsA = 5;
+  int32 colsA = 6;
+  int32 colsB = 7;
+}
+
+message MatrixReply {
+  repeated double result = 1;
+  int32 rows = 2;
+  int32 cols = 3;
+}
