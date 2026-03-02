@@ -1,0 +1,50 @@
+# Byte-compiled / cached files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+venv/
+env/
+.venv/
+virtual/
+steve/
+
+# Distribution / packaging
+build/
+dist/
+*.egg-info/
+.eggs/
+pip-wheel-metadata/
+
+# Testing
+.pytest_cache/
+coverage/
+coverage.xml
+
+# Editor directories and files
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+
+# Mac/Windows
+.DS_Store
+Thumbs.db
+
+# Python-specific
+pyvenv.cfg
+*.pyc
+*.pyo
+*.pyd
+
+# Logs and runtime files
+*.log
+*.sqlite3
+
+# Ignore local pip cache and wheel files
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Notebook checkpoints
+.ipynb_checkpoints/
