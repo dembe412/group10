@@ -1,3 +1,5 @@
-grpcio
-grpcio-tools
-numpy
+grpcio>=1.50.0
+grpcio-tools>=1.50.0
+numpy>=1.20.0
+# Fault tolerance support
+# (state_manager and worker_health_monitor use standard library only)
