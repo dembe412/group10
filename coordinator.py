@@ -367,8 +367,19 @@ def parse_workers_arg(arg):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Distributed matrix coordinator with crash recovery")
     parser.add_argument("--workers", type=str, default=None, help="Comma-separated worker addresses (host:port)")
-    parser.add_argument("--resume", action="store_true", help="Resume from last checkpoint if available")
-    parser.add_argument("--no-recovery", action="store_true", help="Disable crash recovery mechanism")
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        help="(Legacy) Resume from last checkpoint if available. "
+             "By default, the coordinator now automatically resumes if an "
+             "in-progress computation exists. Use --no-recovery to force a fresh run."
+    )
+    parser.add_argument(
+        "--no-recovery",
+        action="store_true",
+        help="Disable crash recovery and start a fresh computation even if "
+             "an in-progress state is found."
+    )
     args = parser.parse_args()
 
     workers = parse_workers_arg(args.workers)
@@ -377,7 +388,12 @@ if __name__ == "__main__":
     health_monitor = WorkerHealthMonitor()
     
     # Check for recovery opportunity
-    should_recover = args.resume and not args.no_recovery and state_manager.has_active_computation()
+    # Automatic resume:
+    # - If there is an in-progress computation and recovery is not disabled,
+    #   we resume it automatically.
+    # - The legacy --resume flag is still honored but no longer required.
+    has_active = state_manager.has_active_computation()
+    should_recover = has_active and not args.no_recovery
     
     if should_recover:
         print("\n" + "="*80)
@@ -412,10 +428,10 @@ if __name__ == "__main__":
             print("✗ Could not load recovery information")
             sys.exit(1)
     else:
-        if args.resume and not state_manager.has_active_computation():
+        if args.resume and not has_active:
             print("No incomplete computation found to recover. Starting fresh.\n")
-        elif args.resume and args.no_recovery:
-            print("Recovery disabled. Starting fresh.\n")
+        elif has_active and args.no_recovery:
+            print("Recovery disabled by --no-recovery. Starting fresh.\n")
         
         # Normal startup: get matrices from user
         A, B = get_matrix_from_user()
@@ -425,8 +441,15 @@ if __name__ == "__main__":
         print("\n" + "="*80)
         print("INPUT MATRICES")
         print("="*80)
-        print(f"Matrix A (shape {A.shape}):\n{A}")
-        print(f"\nMatrix B (shape {B.shape}):\n{B}")
+        # Avoid dumping very large matrices to the console, which can
+        # significantly slow down or crash the process for big sizes.
+        max_elements_to_print = 400  # e.g., up to 20x20
+        if A.size <= max_elements_to_print and B.size <= max_elements_to_print:
+            print(f"Matrix A (shape {A.shape}):\n{A}")
+            print(f"\nMatrix B (shape {B.shape}):\n{B}")
+        else:
+            print(f"Matrix A shape: {A.shape} (contents omitted; too large)")
+            print(f"Matrix B shape: {B.shape} (contents omitted; too large)")
         print("="*80 + "\n")
 
     # Perform computation with fault tolerance
@@ -436,7 +459,10 @@ if __name__ == "__main__":
         print("\n" + "="*80)
         print("FINAL RESULT")
         print("="*80)
-        print(f"Result matrix C (shape {C.shape}):\n{C.astype(int)}")
+        if C.size <= max_elements_to_print:
+            print(f"Result matrix C (shape {C.shape}):\n{C.astype(int)}")
+        else:
+            print(f"Result matrix C shape: {C.shape} (contents omitted; too large)")
         print("="*80 + "\n")
 
         # Display comprehensive timing report
