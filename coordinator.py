@@ -95,7 +95,7 @@ def get_matrix_from_user():
     return A, B
 
 
-def compute_distributed(A, B, workers, retries=3, rpc_timeout=10, state_manager=None, health_monitor=None):
+def compute_distributed(A, B, workers, retries=3, rpc_timeout=60, state_manager=None, health_monitor=None):
     """
     Distributed matrix multiplication with ROBUST FAULT TOLERANCE
     
@@ -161,8 +161,11 @@ def compute_distributed(A, B, workers, retries=3, rpc_timeout=10, state_manager=
         # Dynamic chunk creation based on available workers
         active_workers = available_workers
         num_workers = len(active_workers)
-        nchunks = min(rows, max(1, num_workers))
-        
+
+        # Cap maximum rows per chunk so large matrices don't overload a worker
+        max_rows_per_chunk = 50
+        nchunks = max(1, math.ceil(rows / max_rows_per_chunk))
+
         # Create chunks
         chunks = []
         chunk_size = rows // nchunks
