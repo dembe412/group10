@@ -39,12 +39,45 @@ class MatrixServiceStub(object):
                 request_serializer=matrix__pb2.MatrixRequest.SerializeToString,
                 response_deserializer=matrix__pb2.MatrixReply.FromString,
                 _registered_method=True)
+        self.GossipStateUpdate = channel.unary_unary(
+                '/MatrixService/GossipStateUpdate',
+                request_serializer=matrix__pb2.GossipMessage.SerializeToString,
+                response_deserializer=matrix__pb2.GossipAck.FromString,
+                _registered_method=True)
+        self.PeerProbe = channel.unary_unary(
+                '/MatrixService/PeerProbe',
+                request_serializer=matrix__pb2.PeerProbeRequest.SerializeToString,
+                response_deserializer=matrix__pb2.PeerProbeResponse.FromString,
+                _registered_method=True)
+        self.RequestMissingChunk = channel.unary_unary(
+                '/MatrixService/RequestMissingChunk',
+                request_serializer=matrix__pb2.ChunkDataRequest.SerializeToString,
+                response_deserializer=matrix__pb2.ChunkData.FromString,
+                _registered_method=True)
 
 
 class MatrixServiceServicer(object):
     """Missing associated documentation comment in .proto file."""
 
     def ComputeRows(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def GossipStateUpdate(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def PeerProbe(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def RequestMissingChunk(self, request, context):
         """Missing associated documentation comment in .proto file."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
@@ -57,6 +90,21 @@ def add_MatrixServiceServicer_to_server(servicer, server):
                     servicer.ComputeRows,
                     request_deserializer=matrix__pb2.MatrixRequest.FromString,
                     response_serializer=matrix__pb2.MatrixReply.SerializeToString,
+            ),
+            'GossipStateUpdate': grpc.unary_unary_rpc_method_handler(
+                    servicer.GossipStateUpdate,
+                    request_deserializer=matrix__pb2.GossipMessage.FromString,
+                    response_serializer=matrix__pb2.GossipAck.SerializeToString,
+            ),
+            'PeerProbe': grpc.unary_unary_rpc_method_handler(
+                    servicer.PeerProbe,
+                    request_deserializer=matrix__pb2.PeerProbeRequest.FromString,
+                    response_serializer=matrix__pb2.PeerProbeResponse.SerializeToString,
+            ),
+            'RequestMissingChunk': grpc.unary_unary_rpc_method_handler(
+                    servicer.RequestMissingChunk,
+                    request_deserializer=matrix__pb2.ChunkDataRequest.FromString,
+                    response_serializer=matrix__pb2.ChunkData.SerializeToString,
             ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
@@ -86,6 +134,87 @@ class MatrixService(object):
             '/MatrixService/ComputeRows',
             matrix__pb2.MatrixRequest.SerializeToString,
             matrix__pb2.MatrixReply.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def GossipStateUpdate(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/MatrixService/GossipStateUpdate',
+            matrix__pb2.GossipMessage.SerializeToString,
+            matrix__pb2.GossipAck.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def PeerProbe(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/MatrixService/PeerProbe',
+            matrix__pb2.PeerProbeRequest.SerializeToString,
+            matrix__pb2.PeerProbeResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def RequestMissingChunk(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/MatrixService/RequestMissingChunk',
+            matrix__pb2.ChunkDataRequest.SerializeToString,
+            matrix__pb2.ChunkData.FromString,
             options,
             channel_credentials,
             insecure,

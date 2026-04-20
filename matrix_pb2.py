@@ -24,17 +24,39 @@ _sym_db = _symbol_database.Default()
 
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x0cmatrix.proto\"\x82\x01\n\rMatrixRequest\x12\x11\n\tstart_row\x18\x01 \x01(\x05\x12\x0f\n\x07\x65nd_row\x18\x02 \x01(\x05\x12\x0f\n\x07matrixA\x18\x03 \x03(\x01\x12\x0f\n\x07matrixB\x18\x04 \x03(\x01\x12\r\n\x05rowsA\x18\x05 \x01(\x05\x12\r\n\x05\x63olsA\x18\x06 \x01(\x05\x12\r\n\x05\x63olsB\x18\x07 \x01(\x05\"V\n\x0bMatrixReply\x12\x0e\n\x06result\x18\x01 \x03(\x01\x12\x0c\n\x04rows\x18\x02 \x01(\x05\x12\x0c\n\x04\x63ols\x18\x03 \x01(\x05\x12\x1b\n\x13\x63omputation_time_ms\x18\x04 \x01(\x03\x32<\n\rMatrixService\x12+\n\x0b\x43omputeRows\x12\x0e.MatrixRequest\x1a\x0c.MatrixReplyb\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x0cmatrix.proto\"\x82\x01\n\rMatrixRequest\x12\x11\n\tstart_row\x18\x01 \x01(\x05\x12\x0f\n\x07\x65nd_row\x18\x02 \x01(\x05\x12\x0f\n\x07matrixA\x18\x03 \x03(\x01\x12\x0f\n\x07matrixB\x18\x04 \x03(\x01\x12\r\n\x05rowsA\x18\x05 \x01(\x05\x12\r\n\x05\x63olsA\x18\x06 \x01(\x05\x12\r\n\x05\x63olsB\x18\x07 \x01(\x05\"V\n\x0bMatrixReply\x12\x0e\n\x06result\x18\x01 \x03(\x01\x12\x0c\n\x04rows\x18\x02 \x01(\x05\x12\x0c\n\x04\x63ols\x18\x03 \x01(\x05\x12\x1b\n\x13\x63omputation_time_ms\x18\x04 \x01(\x03\"\xd9\x01\n\rGossipMessage\x12\x16\n\x0e\x63omputation_id\x18\x01 \x01(\t\x12\x1d\n\x07updates\x18\x02 \x03(\x0b\x32\x0c.ChunkUpdate\x12\x35\n\x0cvector_clock\x18\x03 \x03(\x0b\x32\x1f.GossipMessage.VectorClockEntry\x12\x13\n\x0bsender_peer\x18\x04 \x01(\t\x12\x11\n\ttimestamp\x18\x05 \x01(\x03\x1a\x32\n\x10VectorClockEntry\x12\x0b\n\x03key\x18\x01 \x01(\t\x12\r\n\x05value\x18\x02 \x01(\x03:\x02\x38\x01\"p\n\x0b\x43hunkUpdate\x12\x10\n\x08\x63hunk_id\x18\x01 \x01(\x05\x12\x13\n\x0b\x61ssigned_to\x18\x02 \x01(\t\x12\x0e\n\x06status\x18\x03 \x01(\t\x12\x0e\n\x06result\x18\x04 \x03(\x01\x12\x1a\n\x12vector_clock_value\x18\x05 \x01(\x03\"\xa8\x01\n\x10PeerProbeRequest\x12\x0f\n\x07node_id\x18\x01 \x01(\t\x12\x39\n\x0c\x63\x61pabilities\x18\x02 \x03(\x0b\x32#.PeerProbeRequest.CapabilitiesEntry\x12\x13\n\x0bknown_peers\x18\x03 \x03(\t\x1a\x33\n\x11\x43\x61pabilitiesEntry\x12\x0b\n\x03key\x18\x01 \x01(\t\x12\r\n\x05value\x18\x02 \x01(\t:\x02\x38\x01\"V\n\x11PeerProbeResponse\x12\x0f\n\x07healthy\x18\x01 \x01(\x08\x12\x18\n\x10peer_suggestions\x18\x02 \x03(\t\x12\x16\n\x0e\x65stimated_load\x18\x03 \x01(\x03\"<\n\x10\x43hunkDataRequest\x12\x16\n\x0e\x63omputation_id\x18\x01 \x01(\t\x12\x10\n\x08\x63hunk_id\x18\x02 \x01(\x05\"L\n\tChunkData\x12\x10\n\x08\x63hunk_id\x18\x01 \x01(\x05\x12\x0e\n\x06status\x18\x02 \x01(\t\x12\x0e\n\x06result\x18\x03 \x03(\x01\x12\r\n\x05\x66ound\x18\x04 \x01(\x08\"8\n\tGossipAck\x12\x10\n\x08received\x18\x01 \x01(\x08\x12\x19\n\x11updates_processed\x18\x02 \x01(\x05\x32\xd7\x01\n\rMatrixService\x12+\n\x0b\x43omputeRows\x12\x0e.MatrixRequest\x1a\x0c.MatrixReply\x12/\n\x11GossipStateUpdate\x12\x0e.GossipMessage\x1a\n.GossipAck\x12\x32\n\tPeerProbe\x12\x11.PeerProbeRequest\x1a\x12.PeerProbeResponse\x12\x34\n\x13RequestMissingChunk\x12\x11.ChunkDataRequest\x1a\n.ChunkDatab\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
 _builder.BuildTopDescriptorsAndMessages(DESCRIPTOR, 'matrix_pb2', _globals)
 if not _descriptor._USE_C_DESCRIPTORS:
   DESCRIPTOR._loaded_options = None
+  _globals['_GOSSIPMESSAGE_VECTORCLOCKENTRY']._loaded_options = None
+  _globals['_GOSSIPMESSAGE_VECTORCLOCKENTRY']._serialized_options = b'8\001'
+  _globals['_PEERPROBEREQUEST_CAPABILITIESENTRY']._loaded_options = None
+  _globals['_PEERPROBEREQUEST_CAPABILITIESENTRY']._serialized_options = b'8\001'
   _globals['_MATRIXREQUEST']._serialized_start=17
   _globals['_MATRIXREQUEST']._serialized_end=147
   _globals['_MATRIXREPLY']._serialized_start=149
   _globals['_MATRIXREPLY']._serialized_end=235
-  _globals['_MATRIXSERVICE']._serialized_start=237
-  _globals['_MATRIXSERVICE']._serialized_end=297
+  _globals['_GOSSIPMESSAGE']._serialized_start=238
+  _globals['_GOSSIPMESSAGE']._serialized_end=455
+  _globals['_GOSSIPMESSAGE_VECTORCLOCKENTRY']._serialized_start=405
+  _globals['_GOSSIPMESSAGE_VECTORCLOCKENTRY']._serialized_end=455
+  _globals['_CHUNKUPDATE']._serialized_start=457
+  _globals['_CHUNKUPDATE']._serialized_end=569
+  _globals['_PEERPROBEREQUEST']._serialized_start=572
+  _globals['_PEERPROBEREQUEST']._serialized_end=740
+  _globals['_PEERPROBEREQUEST_CAPABILITIESENTRY']._serialized_start=689
+  _globals['_PEERPROBEREQUEST_CAPABILITIESENTRY']._serialized_end=740
+  _globals['_PEERPROBERESPONSE']._serialized_start=742
+  _globals['_PEERPROBERESPONSE']._serialized_end=828
+  _globals['_CHUNKDATAREQUEST']._serialized_start=830
+  _globals['_CHUNKDATAREQUEST']._serialized_end=890
+  _globals['_CHUNKDATA']._serialized_start=892
+  _globals['_CHUNKDATA']._serialized_end=968
+  _globals['_GOSSIPACK']._serialized_start=970
+  _globals['_GOSSIPACK']._serialized_end=1026
+  _globals['_MATRIXSERVICE']._serialized_start=1029
+  _globals['_MATRIXSERVICE']._serialized_end=1244
 # @@protoc_insertion_point(module_scope)

@@ -2,6 +2,9 @@ syntax = "proto3";
 
 service MatrixService {
   rpc ComputeRows (MatrixRequest) returns (MatrixReply);
+  rpc GossipStateUpdate (GossipMessage) returns (GossipAck);
+  rpc PeerProbe (PeerProbeRequest) returns (PeerProbeResponse);
+  rpc RequestMissingChunk (ChunkDataRequest) returns (ChunkData);
 }
 
 message MatrixRequest {
@@ -19,4 +22,49 @@ message MatrixReply {
   int32 rows = 2;
   int32 cols = 3;
   int64 computation_time_ms = 4;
+}
+
+message GossipMessage {
+  string computation_id = 1;
+  repeated ChunkUpdate updates = 2;
+  map<string, int64> vector_clock = 3;
+  string sender_peer = 4;
+  int64 timestamp = 5;
+}
+
+message ChunkUpdate {
+  int32 chunk_id = 1;
+  string assigned_to = 2;
+  string status = 3;
+  repeated double result = 4;
+  int64 vector_clock_value = 5;
+}
+
+message PeerProbeRequest {
+  string node_id = 1;
+  map<string, string> capabilities = 2;
+  repeated string known_peers = 3;
+}
+
+message PeerProbeResponse {
+  bool healthy = 1;
+  repeated string peer_suggestions = 2;
+  int64 estimated_load = 3;
+}
+
+message ChunkDataRequest {
+  string computation_id = 1;
+  int32 chunk_id = 2;
+}
+
+message ChunkData {
+  int32 chunk_id = 1;
+  string status = 2;
+  repeated double result = 3;
+  bool found = 4;
+}
+
+message GossipAck {
+  bool received = 1;
+  int32 updates_processed = 2;
 }
