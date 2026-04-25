@@ -40,7 +40,22 @@ python -m scripts.generate_grpc  # Generate gRPC stubs from matrix.proto
 
 ### 2. Start Peer Nodes
 
-Open **three separate terminals** and start each node from the project root:
+If you are a regular user, simply **double-click the generated `.exe` file** or run the script without any arguments:
+
+```bash
+python -m scripts.run_node
+```
+
+This will launch a friendly interactive menu:
+```
+1. Start a New Network (I am the first PC)
+2. Join an Existing Network
+```
+Just follow the prompts on the screen!
+
+#### Advanced / Developer Start
+
+If you prefer to bypass the menu, you can still use the traditional command-line arguments. Open **three separate terminals** and start each node from the project root:
 
 ```bash
 # Terminal 1 — Bootstrap node
