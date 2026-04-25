@@ -13,11 +13,11 @@ import random
 from typing import Dict, List, Optional, Any
 from threading import Thread, RLock, Event
 
-from consistent_hash import ConsistentHashRing
-from peer_discovery import PeerDiscovery, PeerInfo
-from peer_health import PeerHealthMonitor, PeerHealth
-from distributed_state import DistributedState, ChunkState
-from gossip_manager import GossipManager
+from core.consistent_hash import ConsistentHashRing
+from network.peer_discovery import PeerDiscovery, PeerInfo
+from network.peer_health import PeerHealthMonitor, PeerHealth
+from core.distributed_state import DistributedState, ChunkState
+from network.gossip_manager import GossipManager
 
 import grpc
 import numpy as np
@@ -26,8 +26,8 @@ import numpy as np
 np.set_printoptions(formatter={'float': lambda x: f"{int(x)}" if x % 1 == 0 else f"{x:.1f}"}, suppress=True)
 
 from concurrent import futures
-import matrix_pb2
-import matrix_pb2_grpc
+from grpc_layer import matrix_pb2
+from grpc_layer import matrix_pb2_grpc
 
 
 # Configure logging to both console and a universal file

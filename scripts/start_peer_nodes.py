@@ -15,7 +15,7 @@ import time
 import signal
 import logging
 import subprocess
-from p2p_node import create_local_cluster
+from core.p2p_node import create_local_cluster
 
 logging.basicConfig(
     level=logging.INFO,

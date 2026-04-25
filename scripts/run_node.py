@@ -10,7 +10,7 @@ import argparse
 import sys
 import logging
 import time
-from p2p_node import P2PNode
+from core.p2p_node import P2PNode
 
 def main():
     parser = argparse.ArgumentParser(description="Start a P2P Matrix Computation Node")

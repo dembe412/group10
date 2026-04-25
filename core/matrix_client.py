@@ -25,10 +25,10 @@ from concurrent import futures
 from threading import Thread, RLock, Condition
 from collections import defaultdict
 
-from p2p_node import P2PNode
-from assignment_strategy import RendezvousStrategy
-import matrix_pb2
-import matrix_pb2_grpc
+from core.p2p_node import P2PNode
+from core.assignment_strategy import RendezvousStrategy
+from grpc_layer import matrix_pb2
+from grpc_layer import matrix_pb2_grpc
 
 # Configure logging strictly to file (remove console noise for clean UI)
 log_formatter = logging.Formatter('%(asctime)s [%(levelname)s] %(name)s: %(message)s')

@@ -4,7 +4,7 @@ import threading
 import sys
 import logging
 import numpy as np
-from matrix_client import MatrixClient
+from core.matrix_client import MatrixClient
 
 # Suppress verbose logs for a cleaner stress test output
 logging.getLogger("p2p_node").setLevel(logging.WARNING)
@@ -24,8 +24,7 @@ def run_client_task(client_id, matrix_size=20, results_list=None, results_lock=N
     seeds = [
         ('node-0', 'localhost', 50051),
         ('node-1', 'localhost', 50052),
-        ('node-2', 'localhost', 50053),
-        ('node-3', 'localhost', 50054)
+        ('node-2', 'localhost', 50053)
     ]
     client = MatrixClient(client_id, peer_nodes=seeds)
 
@@ -92,7 +91,7 @@ if __name__ == "__main__":
 
     safe_print("\n" + "="*80)
     safe_print(f"🚀 LAUNCHING CONCURRENT STRESS TEST: {NUM_CLIENTS} CLIENTS")
-    safe_print(f"📡 CONNECTED TO: 4 NODES (50051-50054)")
+    safe_print(f"📡 CONNECTED TO: 3 NODES (50051-50053)")
     safe_print(f"📐 MATRIX SIZE : {MATRIX_DIM}×{MATRIX_DIM}")
     safe_print("="*80)
     safe_print("Test in progress... (Detailed logs → p2p_system.log)\n")
