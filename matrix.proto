@@ -8,13 +8,15 @@ service MatrixService {
 }
 
 message MatrixRequest {
-  int32 start_row = 1;
-  int32 end_row = 2;
-  repeated double matrixA = 3;
-  repeated double matrixB = 4;
-  int32 rowsA = 5;
-  int32 colsA = 6;
-  int32 colsB = 7;
+  string client_id = 1;
+  string computation_id = 2;
+  int32 start_row = 3;
+  int32 end_row = 4;
+  repeated double matrixA = 5;
+  repeated double matrixB = 6;
+  int32 rowsA = 7;
+  int32 colsA = 8;
+  int32 colsB = 9;
 }
 
 message MatrixReply {

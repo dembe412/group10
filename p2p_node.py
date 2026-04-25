@@ -30,10 +30,21 @@ import matrix_pb2
 import matrix_pb2_grpc
 
 
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s [%(levelname)s] %(name)s: %(message)s'
-)
+# Configure logging to both console and a universal file
+log_formatter = logging.Formatter('%(asctime)s [%(levelname)s] %(name)s: %(message)s')
+root_logger = logging.getLogger()
+
+# Console Handler
+console_handler = logging.StreamHandler()
+console_handler.setFormatter(log_formatter)
+root_logger.addHandler(console_handler)
+
+# File Handler (Universal Log)
+file_handler = logging.FileHandler('p2p_system.log')
+file_handler.setFormatter(log_formatter)
+root_logger.addHandler(file_handler)
+
+root_logger.setLevel(logging.INFO)
 logger = logging.getLogger(__name__)
 
 
@@ -45,34 +56,53 @@ class P2PNodeService(matrix_pb2_grpc.MatrixServiceServicer):
         
     def ComputeRows(self, request, context):
         try:
+            client_id = request.client_id
+            comp_id = request.computation_id
             start_row = request.start_row
             end_row = request.end_row
             cols_a = request.colsA
             cols_b = request.colsB
+            
+            # Increment active task count
+            with self.node._lock:
+                self.node._active_tasks += 1
+            
+            timestamp = time.strftime('%H:%M:%S')
             
             # Reconstruct matrices
             rows = end_row - start_row
             matrix_a = np.array(request.matrixA).reshape(rows, cols_a)
             matrix_b = np.array(request.matrixB).reshape(cols_a, cols_b)
             
-            print(f"\n{'='*60}")
-            print(f"[{self.node._node_id}] COMPUTING CHUNK (Rows {start_row} to {end_row-1})")
-            print(f"{'='*60}")
-            print(f"Matrix A Subset (Shape {matrix_a.shape}):")
-            print(matrix_a)
-            print(f"\nMatrix B (Shape {matrix_b.shape}):")
-            print(matrix_b)
+            print(f"\n[{timestamp}] {'='*60}")
+            print(f"[{self.node._node_id}] 📥 REQUEST FROM: {client_id}")
+            print(f"[{self.node._node_id}] 📄 COMP_ID: {comp_id}")
+            print(f"[{self.node._node_id}] ⚙️  CALCULATING: Row {start_row} to {end_row-1}")
+            
+            fmt = {'float_kind': lambda x: f"{int(round(x))}"}
+            str_a = np.array2string(matrix_a, formatter=fmt, prefix="   ")
+            str_b = np.array2string(matrix_b, formatter=fmt, prefix="   ")
+            
+            # Show the actual math logic for "actual working" visual
+            print(f"[{self.node._node_id}] 🧪 MATH: C[{start_row}:{end_row}, :] = A[{start_row}:{end_row}, {cols_a}] @ B[{cols_a}, {cols_b}]")
+            print(f"[{self.node._node_id}] 🔢 ACTUAL MULTIPLICATION:")
+            print(f"   Matrix A:\n   {str_a}")
+            print(f"   @")
+            print(f"   Matrix B:\n   {str_b}")
             
             start_time = time.time()
+            # The actual calculation
             result = np.matmul(matrix_a, matrix_b)
             elapsed_ms = (time.time() - start_time) * 1000
             
-            print(f"\nComputed Result (Shape {result.shape}):")
-            print(result)
-            print(f"Completed in {elapsed_ms:.3f}ms")
+            str_res = np.array2string(result, formatter=fmt, prefix="   ")
+            
+            print(f"[{self.node._node_id}] ✅ RESULT READY: {result.shape} block computed")
+            print(f"[{self.node._node_id}] 🧮 RESULT VALUES:\n   {str_res}")
+            print(f"[{self.node._node_id}] ⏱️  TIME: {elapsed_ms:.2f}ms")
             print(f"{'='*60}\n")
             
-            logger.info(f"[COMPUTE END] Chunk ({start_row}:{end_row}) completed in {elapsed_ms:.3f}ms")
+            logger.info(f"[OP:COMPUTE] client:{client_id} comp:{comp_id} rows:{start_row}-{end_row} time:{elapsed_ms:.2f}ms")
             
             return matrix_pb2.MatrixReply(
                 result=result.flatten().tolist(),
@@ -81,22 +111,30 @@ class P2PNodeService(matrix_pb2_grpc.MatrixServiceServicer):
                 computation_time_ms=int(elapsed_ms)
             )
         except Exception as e:
-            logger.error(f"Error in ComputeRows: {e}", exc_info=True)
+            logger.error(f"[ERROR:COMPUTE] {e}", exc_info=True)
             context.set_details(str(e))
             context.set_code(grpc.StatusCode.INTERNAL)
             return matrix_pb2.MatrixReply()
+        finally:
+            # Decrement active task count and increment total processed
+            with self.node._lock:
+                self.node._active_tasks = max(0, self.node._active_tasks - 1)
+                self.node._computations_processed += 1
 
     def PeerProbe(self, request, context):
-        # Respond to health checks
+        # Respond to health checks with actual load
         return matrix_pb2.PeerProbeResponse(
             healthy=True,
             peer_suggestions=[p.node_id for p in self.node._discovery.get_all_peers()],
-            estimated_load=0
+            estimated_load=self.node._active_tasks
         )
 
     def GossipStateUpdate(self, request, context):
         # Handle incoming gossip updates
         updates_processed = 0
+        sender = request.sender_peer
+        timestamp = time.strftime('%H:%M:%S')
+        
         for update in request.updates:
             success = self.node._state.merge_update(
                 update.chunk_id, 
@@ -105,6 +143,11 @@ class P2PNodeService(matrix_pb2_grpc.MatrixServiceServicer):
             )
             if success:
                 updates_processed += 1
+        
+        if updates_processed > 0:
+            print(f"[{timestamp}] [{self.node._node_id}] 🔄 GOSSIP: Synced {updates_processed} updates from {sender}")
+            logger.info(f"[OP:SYNC] from:{sender} updates:{updates_processed} vclock:{dict(request.vector_clock)}")
+            
         return matrix_pb2.GossipAck(received=True, updates_processed=updates_processed)
 
     def RequestMissingChunk(self, request, context):
@@ -141,6 +184,7 @@ class P2PNode:
         self._computations_processed = 0
         self._bytes_sent = 0
         self._bytes_received = 0
+        self._active_tasks = 0 # Track currently executing tasks
         
         logger.info(f"Initialized P2P node: {node_id}@{host}:{port}")
     
@@ -235,6 +279,9 @@ class P2PNode:
             if not target_node:
                 return False
             
+            # Use computation_id in the hash if possible (for future redirect features)
+            # But for now, we keep it simple since the client does the heavy lifting
+            
             if target_node != self._node_id:
                 status = self._health.get_status(target_node)
                 if status == PeerHealth.UNHEALTHY:
@@ -299,14 +346,13 @@ class P2PNode:
                             f"{peer.host}:{peer.port}",
                             options=[("grpc.connect_timeout_ms", 2000)]
                         )
-                        stub = matrix_pb2_grpc.MatrixServiceStub(channel)
-                        req = matrix_pb2.PeerProbeRequest(
-                            node_id=self._node_id,
-                            known_peers=[p.node_id for p in peers]
-                        )
-                        stub.PeerProbe(req, timeout=2)
+                        response = stub.PeerProbe(req, timeout=2)
                         response_ms = (time.time() - probe_start) * 1000
-                        self._health.record_success(peer.node_id, response_time_ms=response_ms)
+                        self._health.record_success(
+                            peer.node_id, 
+                            response_time_ms=response_ms,
+                            estimated_load=response.estimated_load
+                        )
                         channel.close()
                     except Exception:
                         self._health.record_failure(peer.node_id)

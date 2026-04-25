@@ -36,6 +36,8 @@ class HealthMetrics:
     response_time_ms: float = 0.0
     consecutive_failures: int = 0
     backoff_until: float = 0.0
+    estimated_load: int = 0 # New field for load-aware routing
+
     
     @property
     def success_rate(self) -> float:
@@ -63,7 +65,7 @@ class PeerHealthMonitor:
         self._initial_backoff = initial_backoff
         self._lock = RLock()
     
-    def record_success(self, node_id: str, response_time_ms: float = 0.0) -> None:
+    def record_success(self, node_id: str, response_time_ms: float = 0.0, estimated_load: int = 0) -> None:
         """Record a successful probe/interaction."""
         with self._lock:
             if node_id not in self._metrics:
@@ -73,6 +75,7 @@ class PeerHealthMonitor:
             metrics.success_count += 1
             metrics.last_probe = time.time()
             metrics.response_time_ms = response_time_ms
+            metrics.estimated_load = estimated_load # Update load metadata
             metrics.consecutive_failures = 0
             metrics.reputation = min(1.0, metrics.reputation + 0.1)
             metrics.backoff_until = 0.0

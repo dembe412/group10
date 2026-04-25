@@ -15,8 +15,8 @@ import logging
 import time
 import numpy as np
 
-# Set clean formatting for numpy matrices (1 decimal max, omit if integer)
-np.set_printoptions(formatter={'float': lambda x: f"{int(x)}" if x % 1 == 0 else f"{x:.1f}"}, suppress=True)
+# Set strict 0dps formatting for numpy matrices globally
+np.set_printoptions(formatter={'float_kind': lambda x: f"{int(round(x))}"}, suppress=True)
 
 import sys
 import grpc
@@ -26,13 +26,23 @@ from threading import Thread, RLock, Condition
 from collections import defaultdict
 
 from p2p_node import P2PNode
+from assignment_strategy import RendezvousStrategy
 import matrix_pb2
 import matrix_pb2_grpc
 
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s [%(levelname)s] %(name)s: %(message)s'
-)
+# Configure logging strictly to file (remove console noise for clean UI)
+log_formatter = logging.Formatter('%(asctime)s [%(levelname)s] %(name)s: %(message)s')
+root_logger = logging.getLogger()
+
+# Clear existing handlers to avoid duplicates
+root_logger.handlers = []
+
+# File Handler (Universal Log) - enforce utf-8 to prevent charmap errors
+file_handler = logging.FileHandler('p2p_system.log', encoding='utf-8')
+file_handler.setFormatter(log_formatter)
+root_logger.addHandler(file_handler)
+
+root_logger.setLevel(logging.INFO)
 logger = logging.getLogger(__name__)
 
 
@@ -50,8 +60,9 @@ class MatrixClient:
         """
         self._client_id = client_id
         self._host = "localhost"
-        self._port = 5099
+        self._port = 0 # Use OS-assigned port to avoid conflicts
         self._node = P2PNode(client_id, self._host, self._port, num_chunks=10)
+        self._strategy = RendezvousStrategy() # New assignment strategy
         
         # Peer configuration
         self._peer_nodes = peer_nodes or []
@@ -70,33 +81,39 @@ class MatrixClient:
         logger.info(f"Initialized MatrixClient: {client_id}")
         self._peer_availability = {}
     
-    def check_network_connectivity(self) -> Dict[str, bool]:
+    def check_network_connectivity(self, quiet: bool = False) -> Dict[str, bool]:
         """Check connectivity to all peer nodes and display status."""
-        print("\n" + "="*60)
-        print("NETWORK CONNECTIVITY STATUS")
-        print("="*60)
+        if not quiet:
+            print("\n" + "="*60)
+            print("NETWORK CONNECTIVITY STATUS")
+            print("="*60)
         
         connectivity = {}
         
-        for node_id, host, port in self._peer_nodes:
-            if node_id == self._client_id:
-                connectivity[node_id] = True
-                print(f"  ✓ {node_id} (LOCAL) - {host}:{port}")
-                continue
+        # Sync peer list from internal node discovery
+        peers = self._node._discovery.get_all_peers()
+        for peer in peers:
+            node_id, host, port = peer.node_id, peer.host, peer.port
             
             # Try to reach the node
             try:
                 channel = grpc.insecure_channel(f"{host}:{port}")
+                # Use grpc.channel_ready_future to actually check connectivity
+                grpc.channel_ready_future(channel).result(timeout=0.5)
                 connectivity[node_id] = True
-                print(f"  ✓ {node_id} - {host}:{port} (REACHABLE)")
+                if not quiet:
+                    print(f"  ✓ {node_id} - {host}:{port} (REACHABLE)")
+                channel.close()
             except Exception:
                 connectivity[node_id] = False
-                print(f"  ✗ {node_id} - {host}:{port} (UNREACHABLE)")
+                if not quiet:
+                    print(f"  ✗ {node_id} - {host}:{port} (UNREACHABLE)")
         
         self._peer_availability = connectivity
-        available = sum(1 for v in connectivity.values() if v)
-        total = len(connectivity)
-        print(f"\nResult: {available}/{total} nodes available\n")
+        if not quiet:
+            available = sum(1 for v in connectivity.values() if v)
+            total = len(connectivity)
+            print(f"\nResult: {available}/{total} nodes available\n")
         
         return connectivity
     
@@ -267,7 +284,7 @@ class MatrixClient:
             logger.error(f"Matrix input error: {e}")
             return None, None
     
-    def submit_computation(self) -> str:
+    def submit_computation(self, quiet: bool = False) -> str:
         """
         Submit matrix multiplication to P2P network.
         
@@ -279,12 +296,13 @@ class MatrixClient:
         
         self._computation_id = f"comp:{self._client_id}:{int(time.time())}"
         
-        print(f"\n{'='*60}")
-        print("SUBMITTING COMPUTATION")
-        print(f"{'='*60}")
-        print(f"Computation ID: {self._computation_id}")
-        print(f"Matrix A: {self._matrix_a.shape}")
-        print(f"Matrix B: {self._matrix_b.shape}")
+        if not quiet:
+            print(f"\n{'='*60}")
+            print("SUBMITTING COMPUTATION")
+            print(f"{'='*60}")
+            print(f"Computation ID: {self._computation_id}")
+            print(f"Matrix A: {self._matrix_a.shape}")
+            print(f"Matrix B: {self._matrix_b.shape}")
         
         logger.info(f"Submitting computation {self._computation_id}")
         
@@ -313,30 +331,41 @@ class MatrixClient:
                 chunks_assigned += 1
                 logger.debug(f"Assigned chunk {chunk_id} (rows {start_row}:{end_row})")
         
-        print(f"\n✓ {chunks_assigned} chunks assigned to peer nodes")
+        if not quiet:
+            print(f"\n✓ {chunks_assigned} chunks assigned to peer nodes")
         
         # Check network status
         if not self._peer_availability:
-            self.check_network_connectivity()
+            self.check_network_connectivity(quiet=quiet)
         
+        # Get live nodes and their loads for the strategy
+        healthy_nodes = self._node._health.get_healthy_peers()
+        if not healthy_nodes:
+            # Fallback to all discovery nodes if health monitor is empty
+            healthy_nodes = [p.node_id for p in self._node._discovery.get_all_peers()]
+            
+        node_loads = {nid: metrics.estimated_load for nid, metrics in self._node._health._metrics.items()}
+
         # Show which nodes received chunks
-        print(f"\nChunk Distribution:")
-        chunk_nodes = {}
-        for chunk_id in range(chunks_assigned):
-            target = self._node._hash_ring.get_node(f"chunk:{chunk_id}")
-            if target not in chunk_nodes:
-                chunk_nodes[target] = []
-            chunk_nodes[target].append(chunk_id)
-        
-        for node_id, chunks in sorted(chunk_nodes.items()):
-            status = "LOCAL" if node_id == self._client_id else ("AVAILABLE" if self._peer_availability.get(node_id, False) else "UNAVAILABLE")
-            print(f"  {node_id} [{status}]: chunks {chunks}")
-        
-        print(f"\nWaiting for peer computations...\n")
+        if not quiet:
+            print(f"\nChunk Distribution (Rendezvous Hashing):")
+            chunk_nodes = {}
+            for chunk_id in range(chunks_assigned):
+                routing_key = f"{self._computation_id}:chunk:{chunk_id}"
+                target = self._strategy.get_node(routing_key, healthy_nodes, node_loads)
+                if target not in chunk_nodes:
+                    chunk_nodes[target] = []
+                chunk_nodes[target].append(chunk_id)
+            
+            for node_id, chunks in sorted(chunk_nodes.items()):
+                status = "LOCAL" if node_id == self._client_id else ("AVAILABLE" if self._peer_availability.get(node_id, False) else "UNAVAILABLE")
+                print(f"  {node_id} [{status}]: chunks {chunks}")
+            
+            print(f"\nWaiting for peer computations...\n")
         
         return self._computation_id
     
-    def collect_results(self) -> bool:
+    def collect_results(self, quiet: bool = False) -> bool:
         """
         Execute computation by making real gRPC calls to the peer nodes.
         
@@ -346,7 +375,8 @@ class MatrixClient:
         num_chunks = min(self._node._num_chunks, self._matrix_a.shape[0])
         rows_per_chunk = max(1, self._matrix_a.shape[0] // num_chunks)
         
-        print(f"Executing {num_chunks} chunk computations on peer network...")
+        if not quiet:
+            print(f"Executing {num_chunks} chunk computations on peer network...")
         self._node_attribution = {}
         
         for chunk_id in range(num_chunks):
@@ -359,8 +389,16 @@ class MatrixClient:
             if start_row >= self._matrix_a.shape[0]:
                 break
             
-            # Identify target node
-            target_node_id = self._node._hash_ring.get_node(f"chunk:{chunk_id}")
+            # Get live nodes and their loads for the strategy
+            healthy_nodes = self._node._health.get_healthy_peers()
+            if not healthy_nodes:
+                healthy_nodes = [p.node_id for p in self._node._discovery.get_all_peers()]
+            
+            node_loads = {nid: metrics.estimated_load for nid, metrics in self._node._health._metrics.items()}
+            
+            # Identify target node using Rendezvous Hashing + Load Multiplier
+            routing_key = f"{self._computation_id}:chunk:{chunk_id}"
+            target_node_id = self._strategy.get_node(routing_key, healthy_nodes, node_loads)
             
             if target_node_id == self._node._node_id:
                 host, port = "localhost", self._node._port
@@ -368,7 +406,8 @@ class MatrixClient:
                 peer_info = self._node._discovery.get_peer(target_node_id)
                 if not peer_info:
                     logger.error(f"Cannot find peer address for {target_node_id}")
-                    print(f"  ✗ Chunk {chunk_id}: Peer {target_node_id} is unknown/offline")
+                    if not quiet:
+                        print(f"  ✗ Chunk {chunk_id}: Peer {target_node_id} is unknown/offline")
                     return False
                 host, port = peer_info.host, peer_info.port
                 
@@ -380,6 +419,8 @@ class MatrixClient:
                 stub = matrix_pb2_grpc.MatrixServiceStub(channel)
                 
                 req = matrix_pb2.MatrixRequest(
+                    client_id=self._client_id,
+                    computation_id=self._computation_id,
                     start_row=start_row,
                     end_row=end_row,
                     matrixA=chunk_a.flatten().tolist(),
@@ -389,7 +430,8 @@ class MatrixClient:
                     colsB=self._matrix_b.shape[1]
                 )
                 
-                print(f"  → Sending chunk {chunk_id} (rows {start_row}:{end_row}) to {target_node_id}...")
+                if not quiet:
+                    print(f"  → Sending chunk {chunk_id} (rows {start_row}:{end_row}) to {target_node_id}...")
                 reply = stub.ComputeRows(req, timeout=30)
                 
                 result_matrix = np.array(reply.result).reshape(reply.rows, reply.cols)
@@ -397,17 +439,20 @@ class MatrixClient:
                 self._node_attribution[chunk_id] = target_node_id
                 
                 self._node.complete_chunk(chunk_id, reply.result)
-                print(f"  ✓ Received chunk {chunk_id} result from {target_node_id} in {reply.computation_time_ms}ms")
+                if not quiet:
+                    print(f"  ✓ Received chunk {chunk_id} result from {target_node_id} in {reply.computation_time_ms}ms")
                 
             except grpc.RpcError as e:
                 logger.error(f"RPC failed for chunk {chunk_id} to {target_node_id}: {e.details()}")
-                print(f"  ✗ RPC failed to {target_node_id}: {e.details()}")
+                if not quiet:
+                    print(f"  ✗ RPC failed to {target_node_id}: {e.details()}")
                 return False
         
-        print(f"\n✓ All {num_chunks} chunks computed successfully\n")
+        if not quiet:
+            print(f"\n✓ All {num_chunks} chunks computed successfully\n")
         return len(self._chunk_results) == num_chunks
     
-    def verify_results(self) -> bool:
+    def verify_results(self, quiet: bool = False) -> bool:
         """
         Verify computed results against expected values.
         
@@ -422,9 +467,10 @@ class MatrixClient:
             logger.warning("No expected result")
             return False
         
-        print(f"{'='*60}")
-        print("VERIFYING RESULTS")
-        print(f"{'='*60}")
+        if not quiet:
+            print(f"{'='*60}")
+            print("VERIFYING RESULTS")
+            print(f"{'='*60}")
         
         logger.info("Verifying computation results")
         
@@ -444,25 +490,30 @@ class MatrixClient:
         
         # Check shape
         if computed_result.shape != self._expected_result.shape:
-            print(f"✗ Shape mismatch: {computed_result.shape} vs {self._expected_result.shape}")
+            if not quiet:
+                print(f"✗ Shape mismatch: {computed_result.shape} vs {self._expected_result.shape}")
             return False
         
-        print(f"✓ Result shape: {computed_result.shape}")
+        if not quiet:
+            print(f"✓ Result shape: {computed_result.shape}")
         
         # Check numerical accuracy
         max_error = np.max(np.abs(computed_result - self._expected_result))
         mean_error = np.mean(np.abs(computed_result - self._expected_result))
         
-        print(f"  Max error: {max_error:.2e}")
-        print(f"  Mean error: {mean_error:.2e}")
+        if not quiet:
+            print(f"  Max error: {max_error:.2e}")
+            print(f"  Mean error: {mean_error:.2e}")
         
         tolerance = 1e-10
         if max_error < tolerance:
-            print(f"\n✓ VERIFICATION PASSED - Results are correct!")
+            if not quiet:
+                print(f"\n✓ VERIFICATION PASSED - Results are correct!")
             logger.info("Verification passed")
             return True
         else:
-            print(f"\n✗ VERIFICATION FAILED - Error exceeds tolerance ({tolerance:.2e})")
+            if not quiet:
+                print(f"\n✗ VERIFICATION FAILED - Error exceeds tolerance ({tolerance:.2e})")
             logger.warning(f"Verification failed - error {max_error:.2e}")
             return False
     
@@ -624,5 +675,7 @@ def main():
 
 
 if __name__ == "__main__":
+    if hasattr(sys.stdout, 'reconfigure'):
+        sys.stdout.reconfigure(encoding='utf-8')
     sys.exit(main())
 
