@@ -160,3 +160,34 @@ In all cases, vector clocks ensure strong eventual consistency — no data loss 
 ## License
 
 This project was developed as part of a group assignment.
+## Propagation & Distributed Operation
+
+The system propagates state and computation across all peers using a combination of:
+
+- **Gossip Protocol**: Periodic epidemic‑style dissemination of state updates. Each node selects a subset of peers to push its local view of the distributed state. Updates are merged using CRDT rules, ensuring eventual consistency.
+- **CRDT (Vector Clock) State**: Every update carries a vector clock. Merges are conflict‑free and deterministic, guaranteeing that all nodes converge to the same state without central coordination.
+- **Consistent Hash Ring**: Determines which peer is responsible for each matrix chunk. When a node fails, the next highest‑weight replica (as provided by the Rendezvous strategy) automatically takes over the chunk.
+- **Circuit Breaker & Exponential Backoff**: Detects unresponsive peers, temporarily disables them, and retries after a back‑off period, triggering re‑routing of pending chunks.
+
+### Data Flow Example
+
+1. **Client** generates matrix chunks and computes a hash key for each chunk.
+2. **Consistent Hash** maps each key to a primary peer and optionally N‑1 replica peers.
+3. The client sends a gRPC request to the primary peer. The peer begins computation.
+4. Upon completion, the peer updates its local CRDT state with the result and **gossips** this update to a random fan‑out of peers.
+5. All peers merge the update; vector clocks guarantee that later updates win over earlier ones.
+6. If the primary peer becomes unreachable, replicas already hold the result and can serve the client after a short fail‑over interval.
+
+![System Architecture](file:///C:/Users/Izaek/.gemini/antigravity/brain/61ff80ec-0cf8-464d-8f93-900cbca43a79/system_architecture_1777122487169.png)
+
+### Scaling Out
+
+- Adding a new node requires only launching `run_node.py` with a unique `--node-id` and optional `--seeds`. The node will automatically join the hash ring and start gossiping.
+- The consistent hash ring rebalances automatically; existing chunk assignments migrate lazily as peers request needed data.
+- Network partitions heal automatically: once connectivity is restored, gossip synchronizes divergent states.
+
+### Monitoring & Observability
+
+- Each node logs health metrics (`peer_health.py`) and exposes a simple gRPC `HealthCheck` service.
+- The client can query peer health to make informed routing decisions.
+- Logs are aggregated in `p2p_system.log` for post‑mortem analysis.
