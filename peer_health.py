@@ -104,13 +104,13 @@ class PeerHealthMonitor:
                 )
                 metrics.backoff_until = time.time() + backoff_duration
                 metrics.status = PeerHealth.UNHEALTHY
-                logger.warning(
+                logger.debug(
                     f"Peer {node_id} unhealthy, circuit breaker activated "
                     f"for {backoff_duration:.1f}s"
                 )
             else:
                 metrics.status = PeerHealth.DEGRADED
-                logger.warning(f"Peer {node_id} failure (count={metrics.failure_count})")
+                logger.debug(f"Peer {node_id} failure (count={metrics.failure_count})")
     
     def get_status(self, node_id: str) -> PeerHealth:
         """Get current health status of a peer."""

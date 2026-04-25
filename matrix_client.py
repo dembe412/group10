@@ -14,6 +14,10 @@ A production client node that:
 import logging
 import time
 import numpy as np
+
+# Set clean formatting for numpy matrices (1 decimal max, omit if integer)
+np.set_printoptions(formatter={'float': lambda x: f"{int(x)}" if x % 1 == 0 else f"{x:.1f}"}, suppress=True)
+
 import sys
 import grpc
 from typing import List, Tuple, Dict, Any, Optional
@@ -22,52 +26,14 @@ from threading import Thread, RLock, Condition
 from collections import defaultdict
 
 from p2p_node import P2PNode
-from matrix_pb2 import MatrixRequest, MatrixReply
-from matrix_pb2_grpc import MatrixServiceServicer, add_MatrixServiceServicer_to_server
+import matrix_pb2
+import matrix_pb2_grpc
 
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s [%(levelname)s] %(name)s: %(message)s'
 )
 logger = logging.getLogger(__name__)
-
-
-class MatrixComputationService(MatrixServiceServicer):
-    """gRPC service for handling matrix computation requests from peers."""
-    
-    def __init__(self, client):
-        """Initialize service with reference to client."""
-        self.client = client
-    
-    def ComputeRows(self, request, context):
-        """Receive chunk computation request from peer."""
-        try:
-            start_row = request.start_row
-            end_row = request.end_row
-            cols_a = request.colsA
-            cols_b = request.colsB
-            
-            # Reconstruct matrices from flat arrays
-            rows = end_row - start_row
-            matrix_a = np.array(request.matrixA).reshape(rows, cols_a)
-            matrix_b = np.array(request.matrixB).reshape(cols_a, cols_b)
-            
-            # Compute the result
-            result = np.matmul(matrix_a, matrix_b)
-            
-            logger.info(f"Computed rows {start_row}:{end_row} (shape: {result.shape})")
-            
-            return MatrixReply(
-                result=result.flatten().tolist(),
-                rows=result.shape[0],
-                cols=result.shape[1],
-                computation_time_ms=int(time.time() * 1000)
-            )
-        except Exception as e:
-            logger.error(f"Error in ComputeRows: {e}")
-            context.set_details(str(e))
-            context.set_code(grpc.StatusCode.INTERNAL)
-            return MatrixReply()
 
 
 class MatrixClient:
@@ -88,11 +54,7 @@ class MatrixClient:
         self._node = P2PNode(client_id, self._host, self._port, num_chunks=10)
         
         # Peer configuration
-        self._peer_nodes = peer_nodes or [
-            ('node1', 'localhost', 5001),
-            ('node2', 'localhost', 5002),
-            ('node3', 'localhost', 5003),
-        ]
+        self._peer_nodes = peer_nodes or []
         
         # Computation state
         self._computation_id = None
@@ -106,6 +68,53 @@ class MatrixClient:
         self._running = False
         
         logger.info(f"Initialized MatrixClient: {client_id}")
+        self._peer_availability = {}
+    
+    def check_network_connectivity(self) -> Dict[str, bool]:
+        """Check connectivity to all peer nodes and display status."""
+        print("\n" + "="*60)
+        print("NETWORK CONNECTIVITY STATUS")
+        print("="*60)
+        
+        connectivity = {}
+        
+        for node_id, host, port in self._peer_nodes:
+            if node_id == self._client_id:
+                connectivity[node_id] = True
+                print(f"  ✓ {node_id} (LOCAL) - {host}:{port}")
+                continue
+            
+            # Try to reach the node
+            try:
+                channel = grpc.insecure_channel(f"{host}:{port}")
+                connectivity[node_id] = True
+                print(f"  ✓ {node_id} - {host}:{port} (REACHABLE)")
+            except Exception:
+                connectivity[node_id] = False
+                print(f"  ✗ {node_id} - {host}:{port} (UNREACHABLE)")
+        
+        self._peer_availability = connectivity
+        available = sum(1 for v in connectivity.values() if v)
+        total = len(connectivity)
+        print(f"\nResult: {available}/{total} nodes available\n")
+        
+        return connectivity
+    
+    def _generate_random_matrix(self, rows: int, cols: int, method: str = "random",
+                               min_val: float = 0.0, max_val: float = 1.0) -> np.ndarray:
+        """Generate a matrix with specified method (random, ones, zeros, or range)."""
+        if method == "random":
+            return np.random.rand(rows, cols).astype(np.float64)
+        elif method == "ones":
+            return np.ones((rows, cols), dtype=np.float64)
+        elif method == "zeros":
+            return np.zeros((rows, cols), dtype=np.float64)
+        elif method == "range":
+            return (np.random.rand(rows, cols) * (max_val - min_val) + min_val).astype(np.float64)
+        elif method == "randint":
+            return np.random.randint(int(min_val), int(max_val) + 1, size=(rows, cols)).astype(np.float64)
+        else:
+            raise ValueError(f"Unknown method: {method}")
     
     def start(self) -> bool:
         """Start client node."""
@@ -118,6 +127,14 @@ class MatrixClient:
             
             # Start P2P node
             self._node.start()
+            
+            # Remove client from hash ring so it does not perform computation
+            try:
+                self._node._hash_ring.remove_node(self._client_id)
+            except Exception as e:
+                logger.debug(f"Could not remove client from hash ring: {e}")
+                pass
+                
             self._running = True
             time.sleep(1)  # Wait for discovery
             
@@ -131,7 +148,7 @@ class MatrixClient:
     
     def input_matrices(self) -> Tuple[Optional[np.ndarray], Optional[np.ndarray]]:
         """
-        Interactively get matrix dimensions and generate random matrices.
+        Interactively get matrix dimensions and generate with user choice of method.
         
         Returns:
             (matrix_a, matrix_b) or (None, None) on error
@@ -149,24 +166,105 @@ class MatrixClient:
             if rows_a <= 0 or cols_a <= 0 or cols_b <= 0:
                 raise ValueError("All dimensions must be positive")
             
-            print(f"\nGenerating random matrices: {rows_a}x{cols_a} × {cols_a}x{cols_b}")
+            # Generation method menu
+            print(f"\nMatrix generation method:")
+            print(f"  1. Random floats [0.0, 1.0] (default)")
+            print(f"  2. Random integers [0, 10]")
+            print(f"  3. Random integers [10, 50]")
+            print(f"  4. Random integers [50, 100]")
+            print(f"  5. Random integers [100, 1000] (Stress Test)")
+            print(f"  6. Custom float range")
+            print(f"  7. Custom integer range")
+            print(f"  8. Ones (all values = 1.0)")
+            print(f"  9. Zeros (all values = 0.0)")
+            print(f"  10. Manual Input")
+            method_choice = input("Select method (1-10, default 1): ").strip() or "1"
             
-            # Generate random matrices
-            self._matrix_a = np.random.rand(rows_a, cols_a).astype(np.float64)
-            self._matrix_b = np.random.rand(cols_a, cols_b).astype(np.float64)
+            if method_choice == "10":
+                print(f"\nEnter {rows_a} rows for Matrix A, each row as {cols_a} numbers separated by spaces")
+                A_rows = []
+                for i in range(rows_a):
+                    while True:
+                        line = input(f"A row {i}: ").strip()
+                        parts = line.split()
+                        if len(parts) != cols_a:
+                            print(f"Expected {cols_a} numbers, got {len(parts)}")
+                            continue
+                        A_rows.append([float(x) for x in parts])
+                        break
+
+                print(f"\nEnter {cols_a} rows for Matrix B, each row as {cols_b} numbers separated by spaces")
+                B_rows = []
+                for i in range(cols_a):
+                    while True:
+                        line = input(f"B row {i}: ").strip()
+                        parts = line.split()
+                        if len(parts) != cols_b:
+                            print(f"Expected {cols_b} numbers, got {len(parts)}")
+                            continue
+                        B_rows.append([float(x) for x in parts])
+                        break
+
+                self._matrix_a = np.array(A_rows)
+                self._matrix_b = np.array(B_rows)
+                method = "manual"
+            else:
+                method_map = {
+                    "1": ("random", 0.0, 1.0),
+                    "2": ("randint", 0.0, 10.0),
+                    "3": ("randint", 10.0, 50.0),
+                    "4": ("randint", 50.0, 100.0),
+                    "5": ("randint", 100.0, 1000.0),
+                    "6": ("range", 0.0, 1.0),
+                    "7": ("randint", 0.0, 10.0),
+                    "8": ("ones", 0.0, 0.0),
+                    "9": ("zeros", 0.0, 0.0),
+                }
+                
+                if method_choice not in method_map:
+                    raise ValueError(f"Invalid choice: {method_choice}")
+                
+                method, min_val, max_val = method_map[method_choice]
+                
+                # For range method, get min and max values
+                if method in ("range", "randint") and method_choice in ("6", "7"):
+                    min_val = float(input("  Enter minimum value: "))
+                    max_val = float(input("  Enter maximum value: "))
+                    if min_val >= max_val:
+                        raise ValueError("Minimum must be less than maximum")
+                
+                print(f"\nGenerating matrices using method '{method}': {rows_a}x{cols_a} × {cols_a}x{cols_b}")
+                
+                # Generate matrices
+                self._matrix_a = self._generate_random_matrix(rows_a, cols_a, method, min_val, max_val)
+                self._matrix_b = self._generate_random_matrix(cols_a, cols_b, method, min_val, max_val)
+            
+            # Show preview
+            print(f"\n✓ Generated matrices:")
+            print(f"    Matrix A: {self._matrix_a.shape}")
+            print(self._matrix_a)
+            print(f"      Min: {self._matrix_a.min():.6f}, Max: {self._matrix_a.max():.6f}, Mean: {self._matrix_a.mean():.6f}")
+            print(f"    Matrix B: {self._matrix_b.shape}")
+            print(self._matrix_b)
+            print(f"      Min: {self._matrix_b.min():.6f}, Max: {self._matrix_b.max():.6f}, Mean: {self._matrix_b.mean():.6f}")
+            
+            # Ask for confirmation
+            confirm = input("\nUse these matrices? (y/n, default y): ").strip().lower() or "y"
+            if confirm != "y":
+                print("Matrices rejected. Try again.\n")
+                return None, None
             
             # Compute expected result locally
             self._expected_result = np.matmul(self._matrix_a, self._matrix_b)
             
-            print(f"✓ Generated matrices:")
-            print(f"    Matrix A: {self._matrix_a.shape}")
-            print(f"    Matrix B: {self._matrix_b.shape}")
+            logger.info(f"Generated matrices: A{self._matrix_a.shape} @ B{self._matrix_b.shape} → {self._expected_result.shape}")
             print(f"    Expected result: {self._expected_result.shape}")
             
             return self._matrix_a, self._matrix_b
             
         except ValueError as e:
             print(f"✗ Invalid input: {e}")
+            logger.error(f"Matrix input error: {e}")
             return None, None
     
     def submit_computation(self) -> str:
@@ -216,22 +314,40 @@ class MatrixClient:
                 logger.debug(f"Assigned chunk {chunk_id} (rows {start_row}:{end_row})")
         
         print(f"\n✓ {chunks_assigned} chunks assigned to peer nodes")
-        print(f"Waiting for peer computations...\n")
+        
+        # Check network status
+        if not self._peer_availability:
+            self.check_network_connectivity()
+        
+        # Show which nodes received chunks
+        print(f"\nChunk Distribution:")
+        chunk_nodes = {}
+        for chunk_id in range(chunks_assigned):
+            target = self._node._hash_ring.get_node(f"chunk:{chunk_id}")
+            if target not in chunk_nodes:
+                chunk_nodes[target] = []
+            chunk_nodes[target].append(chunk_id)
+        
+        for node_id, chunks in sorted(chunk_nodes.items()):
+            status = "LOCAL" if node_id == self._client_id else ("AVAILABLE" if self._peer_availability.get(node_id, False) else "UNAVAILABLE")
+            print(f"  {node_id} [{status}]: chunks {chunks}")
+        
+        print(f"\nWaiting for peer computations...\n")
         
         return self._computation_id
     
-    def collect_results_simulated(self) -> bool:
+    def collect_results(self) -> bool:
         """
-        Simulate peer node computations and collect results.
-        This is for testing. In production, results come via gossip.
+        Execute computation by making real gRPC calls to the peer nodes.
         
         Returns:
-            True if all results collected
+            True if all results collected successfully
         """
         num_chunks = min(self._node._num_chunks, self._matrix_a.shape[0])
         rows_per_chunk = max(1, self._matrix_a.shape[0] // num_chunks)
         
-        print(f"Simulating {num_chunks} peer computations...")
+        print(f"Executing {num_chunks} chunk computations on peer network...")
+        self._node_attribution = {}
         
         for chunk_id in range(num_chunks):
             start_row = chunk_id * rows_per_chunk
@@ -243,20 +359,52 @@ class MatrixClient:
             if start_row >= self._matrix_a.shape[0]:
                 break
             
-            # Simulate computation
+            # Identify target node
+            target_node_id = self._node._hash_ring.get_node(f"chunk:{chunk_id}")
+            
+            if target_node_id == self._node._node_id:
+                host, port = "localhost", self._node._port
+            else:
+                peer_info = self._node._discovery.get_peer(target_node_id)
+                if not peer_info:
+                    logger.error(f"Cannot find peer address for {target_node_id}")
+                    print(f"  ✗ Chunk {chunk_id}: Peer {target_node_id} is unknown/offline")
+                    return False
+                host, port = peer_info.host, peer_info.port
+                
             chunk_a = self._matrix_a[start_row:end_row]
-            chunk_result = np.matmul(chunk_a, self._matrix_b)
             
-            self._chunk_results[chunk_id] = chunk_result
-            
-            # Mark as complete in distributed state
-            self._node.complete_chunk(chunk_id, chunk_result.flatten().tolist())
-            
-            elapsed = (chunk_id + 1) / num_chunks * 100
-            print(f"  [{chunk_id+1}/{num_chunks}] Chunk computed ({elapsed:.0f}%)")
-            time.sleep(0.1)
+            try:
+                # Real gRPC call
+                channel = grpc.insecure_channel(f"{host}:{port}")
+                stub = matrix_pb2_grpc.MatrixServiceStub(channel)
+                
+                req = matrix_pb2.MatrixRequest(
+                    start_row=start_row,
+                    end_row=end_row,
+                    matrixA=chunk_a.flatten().tolist(),
+                    matrixB=self._matrix_b.flatten().tolist(),
+                    rowsA=chunk_a.shape[0],
+                    colsA=chunk_a.shape[1],
+                    colsB=self._matrix_b.shape[1]
+                )
+                
+                print(f"  → Sending chunk {chunk_id} (rows {start_row}:{end_row}) to {target_node_id}...")
+                reply = stub.ComputeRows(req, timeout=30)
+                
+                result_matrix = np.array(reply.result).reshape(reply.rows, reply.cols)
+                self._chunk_results[chunk_id] = result_matrix
+                self._node_attribution[chunk_id] = target_node_id
+                
+                self._node.complete_chunk(chunk_id, reply.result)
+                print(f"  ✓ Received chunk {chunk_id} result from {target_node_id} in {reply.computation_time_ms}ms")
+                
+            except grpc.RpcError as e:
+                logger.error(f"RPC failed for chunk {chunk_id} to {target_node_id}: {e.details()}")
+                print(f"  ✗ RPC failed to {target_node_id}: {e.details()}")
+                return False
         
-        print(f"✓ All {num_chunks} chunks completed\n")
+        print(f"\n✓ All {num_chunks} chunks computed successfully\n")
         return len(self._chunk_results) == num_chunks
     
     def verify_results(self) -> bool:
@@ -292,6 +440,7 @@ class MatrixClient:
         
         # Concatenate all chunks
         computed_result = np.vstack(computed_chunks)
+        self._computed_result = computed_result
         
         # Check shape
         if computed_result.shape != self._expected_result.shape:
@@ -331,10 +480,32 @@ class MatrixClient:
         print(f"  Healthy Peers: {stats['healthy_peers']}")
         print(f"\nMatrices:")
         print(f"  Matrix A: {self._matrix_a.shape if self._matrix_a is not None else 'N/A'}")
+        if self._matrix_a is not None:
+            print(self._matrix_a)
         print(f"  Matrix B: {self._matrix_b.shape if self._matrix_b is not None else 'N/A'}")
+        if self._matrix_b is not None:
+            print(self._matrix_b)
         print(f"  Result: {self._expected_result.shape if self._expected_result is not None else 'N/A'}")
+        if hasattr(self, '_computed_result') and self._computed_result is not None:
+            print(self._computed_result)
+        elif self._expected_result is not None:
+            print(self._expected_result)
         print(f"\nChunks:")
         print(f"  Completed: {len(self._chunk_results)}")
+        
+        print(f"\nNode Attribution:")
+        if hasattr(self, '_node_attribution') and self._node_attribution:
+            num_chunks = min(self._node._num_chunks, self._matrix_a.shape[0])
+            rows_per_chunk = max(1, self._matrix_a.shape[0] // num_chunks)
+            for chunk_id, node_id in sorted(self._node_attribution.items()):
+                start_row = chunk_id * rows_per_chunk
+                end_row = start_row + rows_per_chunk
+                if chunk_id == num_chunks - 1:
+                    end_row = self._matrix_a.shape[0]
+                print(f"  Chunk {chunk_id} (Rows {start_row}-{end_row-1}, Cols 0-{self._matrix_b.shape[1]-1}) → Processed by: {node_id}")
+        else:
+            print(f"  No attribution data available.")
+        
         print(f"{'='*60}\n")
     
     def stop(self) -> None:
@@ -344,24 +515,43 @@ class MatrixClient:
         logger.info(f"Stopped client {self._client_id}")
 
 
+import argparse
+    
 def main():
     """Main client execution loop."""
+    parser = argparse.ArgumentParser(description="P2P Matrix Client")
+    parser.add_argument("--client-id", default="client", help="Client ID")
+    parser.add_argument("--seeds", help="Comma-separated list of seed nodes to connect to (format: node_id@host:port)")
+    args = parser.parse_args()
+
     print("\n" + "="*60)
     print("  P2P DISTRIBUTED MATRIX MULTIPLICATION CLIENT")
     print("="*60)
     
-    # Get client ID
-    client_id = input("\nEnter client ID (default: client): ").strip() or "client"
+    client_id = args.client_id
     
-    # Create and start client
-    client = MatrixClient(
-        client_id,
-        peer_nodes=[
-            ('node1', 'localhost', 5001),
-            ('node2', 'localhost', 5002),
-            ('node3', 'localhost', 5003),
-        ]
-    )
+    client = MatrixClient(client_id, peer_nodes=[])
+    
+    if args.seeds:
+        seed_list = args.seeds.split(',')
+        print("\nConnecting to seed nodes:")
+        for seed in seed_list:
+            if '@' in seed and ':' in seed:
+                try:
+                    seed_id, addr = seed.split('@')
+                    seed_host, seed_port = addr.split(':')
+                    client._node.add_peer(seed_id, seed_host, int(seed_port))
+                    print(f"  ✓ Added seed: {seed_id} at {seed_host}:{seed_port}")
+                except Exception as e:
+                    print(f"  ✗ Failed to parse seed '{seed}': {e}")
+            else:
+                print(f"  ✗ Invalid seed format '{seed}'. Expected node_id@host:port")
+    else:
+        # Default local testing setup
+        client._node.add_peer('node-0', 'localhost', 50051)
+        client._node.add_peer('node-1', 'localhost', 50052)
+        client._node.add_peer('node-2', 'localhost', 50053)
+        print("\nUsing default local seed nodes (node-0, node-1, node-2).")
     
     print(f"\nStarting {client_id}...")
     if not client.start():
@@ -392,8 +582,8 @@ def main():
                 # Submit computation
                 comp_id = client.submit_computation()
                 
-                # Collect results (simulated)
-                success = client.collect_results_simulated()
+                # Collect results
+                success = client.collect_results()
                 
                 # Verify
                 verified = client.verify_results()
@@ -407,12 +597,15 @@ def main():
                     print("✗ Computation verification failed")
                 
             elif choice == "2":
+                client.check_network_connectivity()
                 stats = client._node.get_stats()
-                print(f"\nNetwork Status:")
-                print(f"  Node: {stats['node_id']}")
-                print(f"  Peers: {stats['peers']}")
+                print(f"\nLocal Node Status:")
+                print(f"  Node ID: {stats['node_id']}")
+                print(f"  Local Port: {client._port}")
+                print(f"  Registered Peers: {stats['peers']}")
                 print(f"  Healthy Peers: {stats['healthy_peers']}")
-                print(f"  Running: {stats['running']}")
+                print(f"\nTo test with real peer nodes, start them in another terminal:")
+                print(f"  python -c 'from p2p_node import create_local_cluster; nodes = create_local_cluster(3); input()'")
                 
             elif choice == "3":
                 print("\nExiting...")

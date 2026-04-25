@@ -19,12 +19,100 @@ from peer_health import PeerHealthMonitor, PeerHealth
 from distributed_state import DistributedState, ChunkState
 from gossip_manager import GossipManager
 
+import grpc
+import numpy as np
+
+# Set clean formatting for numpy matrices (1 decimal max, omit if integer)
+np.set_printoptions(formatter={'float': lambda x: f"{int(x)}" if x % 1 == 0 else f"{x:.1f}"}, suppress=True)
+
+from concurrent import futures
+import matrix_pb2
+import matrix_pb2_grpc
+
 
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s [%(levelname)s] %(name)s: %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+
+class P2PNodeService(matrix_pb2_grpc.MatrixServiceServicer):
+    """gRPC service for P2P Node to handle incoming requests."""
+    
+    def __init__(self, node):
+        self.node = node
+        
+    def ComputeRows(self, request, context):
+        try:
+            start_row = request.start_row
+            end_row = request.end_row
+            cols_a = request.colsA
+            cols_b = request.colsB
+            
+            # Reconstruct matrices
+            rows = end_row - start_row
+            matrix_a = np.array(request.matrixA).reshape(rows, cols_a)
+            matrix_b = np.array(request.matrixB).reshape(cols_a, cols_b)
+            
+            print(f"\n{'='*60}")
+            print(f"[{self.node._node_id}] COMPUTING CHUNK (Rows {start_row} to {end_row-1})")
+            print(f"{'='*60}")
+            print(f"Matrix A Subset (Shape {matrix_a.shape}):")
+            print(matrix_a)
+            print(f"\nMatrix B (Shape {matrix_b.shape}):")
+            print(matrix_b)
+            
+            start_time = time.time()
+            result = np.matmul(matrix_a, matrix_b)
+            elapsed_ms = (time.time() - start_time) * 1000
+            
+            print(f"\nComputed Result (Shape {result.shape}):")
+            print(result)
+            print(f"Completed in {elapsed_ms:.3f}ms")
+            print(f"{'='*60}\n")
+            
+            logger.info(f"[COMPUTE END] Chunk ({start_row}:{end_row}) completed in {elapsed_ms:.3f}ms")
+            
+            return matrix_pb2.MatrixReply(
+                result=result.flatten().tolist(),
+                rows=result.shape[0],
+                cols=result.shape[1],
+                computation_time_ms=int(elapsed_ms)
+            )
+        except Exception as e:
+            logger.error(f"Error in ComputeRows: {e}", exc_info=True)
+            context.set_details(str(e))
+            context.set_code(grpc.StatusCode.INTERNAL)
+            return matrix_pb2.MatrixReply()
+
+    def PeerProbe(self, request, context):
+        # Respond to health checks
+        return matrix_pb2.PeerProbeResponse(
+            healthy=True,
+            peer_suggestions=[p.node_id for p in self.node._discovery.get_all_peers()],
+            estimated_load=0
+        )
+
+    def GossipStateUpdate(self, request, context):
+        # Handle incoming gossip updates
+        updates_processed = 0
+        for update in request.updates:
+            success = self.node._state.merge_update(
+                update.chunk_id, 
+                {"status": update.status, "assigned_to": update.assigned_to, "result": update.result}, 
+                dict(request.vector_clock)
+            )
+            if success:
+                updates_processed += 1
+        return matrix_pb2.GossipAck(received=True, updates_processed=updates_processed)
+
+    def RequestMissingChunk(self, request, context):
+        # Stub for chunk recovery
+        chunk = self.node._state.get_chunk(request.chunk_id)
+        if chunk and chunk.result:
+            return matrix_pb2.ChunkData(chunk_id=request.chunk_id, status=chunk.status, result=chunk.result, found=True)
+        return matrix_pb2.ChunkData(chunk_id=request.chunk_id, found=False)
 
 
 class P2PNode:
@@ -85,7 +173,24 @@ class P2PNode:
             )
             self._gossip_thread.start()
             
-            logger.info(f"Started P2P node {self._node_id}")
+            # Start gRPC Server
+            self._grpc_server = grpc.server(futures.ThreadPoolExecutor(max_workers=10))
+            matrix_pb2_grpc.add_MatrixServiceServicer_to_server(
+                P2PNodeService(self), self._grpc_server
+            )
+            
+            # Bind to all interfaces for multi-PC support
+            # Use 0.0.0.0 (IPv4) — [::] (IPv6) may be unavailable on Windows
+            listen_addr = f"0.0.0.0:{self._port}"
+            bound_port = self._grpc_server.add_insecure_port(listen_addr)
+            if bound_port == 0:
+                raise RuntimeError(
+                    f"Failed to bind to address {listen_addr}; "
+                    "the port may be in use or the address is unavailable."
+                )
+            self._grpc_server.start()
+            
+            logger.info(f"Started P2P node {self._node_id} gRPC server on {listen_addr}")
     
     def stop(self) -> None:
         """Stop the P2P node and background threads."""
@@ -100,6 +205,9 @@ class P2PNode:
             self._probe_thread.join(timeout=5)
         if self._gossip_thread:
             self._gossip_thread.join(timeout=5)
+            
+        if hasattr(self, '_grpc_server') and self._grpc_server:
+            self._grpc_server.stop(grace=2)
         
         logger.info(f"Stopped P2P node {self._node_id}")
     
@@ -118,7 +226,7 @@ class P2PNode:
             logger.info(f"Added peer {node_id}@{host}:{port}")
     
     def assign_chunk(self, chunk_id: int, data: List[float]) -> bool:
-        """Assign a chunk for computation."""
+        """Assign a chunk for computation with enhanced logging."""
         with self._lock:
             if chunk_id >= self._num_chunks:
                 return False
@@ -142,6 +250,8 @@ class P2PNode:
                 assigned_to=target_node
             )
             
+            logger.info(f"Assigning chunk {chunk_id} to node {target_node} for computation")
+            
             msg_id = f"assign:{chunk_id}:{time.time()}"
             self._gossip.add_message(msg_id, {
                 "type": "chunk_assignment",
@@ -153,13 +263,16 @@ class P2PNode:
             return True
     
     def complete_chunk(self, chunk_id: int, result: List[float]) -> None:
-        """Mark a chunk as completed with result."""
+        """Mark a chunk as completed with result and enhanced logging."""
         with self._lock:
             self._state.update_chunk(
                 chunk_id,
                 "completed",
                 result=result
             )
+            
+            vector_clock_version = self._state.get_vector_clock().get(self._node_id, 0)
+            logger.info(f"[CHUNK COMPLETE] Chunk {chunk_id} marked as completed (vector_clock: {vector_clock_version})")
             
             msg_id = f"complete:{chunk_id}:{time.time()}"
             self._gossip.add_message(msg_id, {
@@ -169,7 +282,7 @@ class P2PNode:
             })
     
     def _probe_loop(self) -> None:
-        """Background thread for health probing."""
+        """Background thread for health probing via real gRPC PeerProbe calls."""
         logger.info(f"{self._node_id} probe loop started")
         
         while self._running and not self._stop_event.wait(timeout=5):
@@ -180,9 +293,22 @@ class P2PNode:
                     if not self._health.should_probe(peer.node_id):
                         continue
                     
-                    if random.random() < 0.9:
-                        self._health.record_success(peer.node_id, response_time_ms=10)
-                    else:
+                    probe_start = time.time()
+                    try:
+                        channel = grpc.insecure_channel(
+                            f"{peer.host}:{peer.port}",
+                            options=[("grpc.connect_timeout_ms", 2000)]
+                        )
+                        stub = matrix_pb2_grpc.MatrixServiceStub(channel)
+                        req = matrix_pb2.PeerProbeRequest(
+                            node_id=self._node_id,
+                            known_peers=[p.node_id for p in peers]
+                        )
+                        stub.PeerProbe(req, timeout=2)
+                        response_ms = (time.time() - probe_start) * 1000
+                        self._health.record_success(peer.node_id, response_time_ms=response_ms)
+                        channel.close()
+                    except Exception:
                         self._health.record_failure(peer.node_id)
                 
                 self._discovery.cleanup_expired_peers()
@@ -232,6 +358,26 @@ class P2PNode:
                 **gossip_stats,
                 "healthy_peers": len(self._health.get_healthy_peers())
             }
+    
+    def get_computation_log(self) -> Dict[int, Dict[str, Any]]:
+        """Get a log of all computed chunks with their metadata."""
+        with self._lock:
+            log = {}
+            all_chunks = self._state.get_all_chunks()
+            
+            for chunk_id, chunk_state in all_chunks.items():
+                if chunk_state.status == "completed":
+                    log[chunk_id] = {
+                        "chunk_id": chunk_id,
+                        "status": chunk_state.status,
+                        "assigned_to": chunk_state.assigned_to,
+                        "timestamp": chunk_state.timestamp,
+                        "vector_clock": dict(chunk_state.vector_clock),
+                        "result_length": len(chunk_state.result) if chunk_state.result else 0,
+                    }
+            
+            logger.info(f"Computation log: {len(log)} chunks completed on {self._node_id}")
+            return log
 
 
 def create_local_cluster(num_nodes: int = 3) -> List[P2PNode]:
@@ -253,8 +399,19 @@ def create_local_cluster(num_nodes: int = 3) -> List[P2PNode]:
             if i != j:
                 node.add_peer(other._node_id, other._host, other._port)
     
+    started = []
     for node in nodes:
-        node.start()
+        try:
+            node.start()
+            started.append(node)
+        except Exception:
+            # Stop already-started nodes to release their ports
+            for n in started:
+                try:
+                    n.stop()
+                except Exception:
+                    pass
+            raise
     
     return nodes
 
