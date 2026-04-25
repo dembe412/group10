@@ -35,28 +35,28 @@ A **fully decentralized** distributed matrix multiplication system built with Py
 
 ```bash
 pip install -r requirements.txt
-python generate_grpc.py  # Generate gRPC stubs from matrix.proto
+python -m scripts.generate_grpc  # Generate gRPC stubs from matrix.proto
 ```
 
 ### 2. Start Peer Nodes
 
-Open **three separate terminals** and start each node:
+Open **three separate terminals** and start each node from the project root:
 
 ```bash
 # Terminal 1 — Bootstrap node
-python run_node.py --node-id node-0 --port 50051
+python -m scripts.run_node --node-id node-0 --port 50051
 
 # Terminal 2
-python run_node.py --node-id node-1 --port 50052 --seeds node-0@localhost:50051
+python -m scripts.run_node --node-id node-1 --port 50052 --seeds node-0@localhost:50051
 
 # Terminal 3
-python run_node.py --node-id node-2 --port 50053 --seeds node-0@localhost:50051
+python -m scripts.run_node --node-id node-2 --port 50053 --seeds node-0@localhost:50051
 ```
 
 Or start all nodes at once:
 
 ```bash
-python start_peer_nodes.py
+python -m scripts.start_peer_nodes
 ```
 
 ### 3. Run the Client
@@ -64,7 +64,12 @@ python start_peer_nodes.py
 In a **fourth terminal**, launch the interactive matrix client:
 
 ```bash
-python matrix_client.py
+python -m core.matrix_client
+```
+
+To run a concurrent stress test, you can use:
+```bash
+python -m tests.stress_test
 ```
 
 The client provides an interactive menu to:
@@ -74,37 +79,44 @@ The client provides an interactive menu to:
 
 ### Multi-PC Deployment
 
-To run nodes across different machines on the same network:
+To run nodes across different machines on the same network (ensure you are running from the project root directory):
 
 ```bash
 # On Machine A (192.168.1.10)
-python run_node.py --node-id node-0 --host 0.0.0.0 --port 50051
+python -m scripts.run_node --node-id node-0 --host 0.0.0.0 --port 50051
 
 # On Machine B (192.168.1.11)
-python run_node.py --node-id node-1 --host 0.0.0.0 --port 50051 --seeds node-0@192.168.1.10:50051
+python -m scripts.run_node --node-id node-1 --host 0.0.0.0 --port 50051 --seeds node-0@192.168.1.10:50051
 
 # On Machine C — run the client
-python matrix_client.py --seeds node-0@192.168.1.10:50051,node-1@192.168.1.11:50051
+python -m core.matrix_client --seeds node-0@192.168.1.10:50051,node-1@192.168.1.11:50051
 ```
 
 ## Project Structure
 
 ```
 group10/
-├── p2p_node.py            # Core P2P node (gRPC server, gossip, health loops)
-├── consistent_hash.py     # Consistent hash ring (DHT) for chunk routing
-├── peer_discovery.py      # Peer registration and bootstrap
-├── peer_health.py         # Health monitoring with circuit breaker
-├── distributed_state.py   # CRDT-based state with vector clocks
-├── gossip_manager.py      # Epidemic state propagation
-├── matrix.proto           # gRPC/Protobuf service definitions
-├── matrix_pb2.py          # Generated Protobuf code
-├── matrix_pb2_grpc.py     # Generated gRPC service stubs
-├── matrix_client.py       # Interactive client for matrix computation
-├── run_node.py            # CLI to start a single peer node
-├── start_peer_nodes.py    # Convenience script to start a local cluster
-├── generate_grpc.py       # Regenerate gRPC files from matrix.proto
-├── requirements.txt       # Python dependencies
+├── core/
+│   ├── p2p_node.py            # Core P2P node (gRPC server, gossip, health loops)
+│   ├── consistent_hash.py     # Consistent hash ring (DHT) for chunk routing
+│   ├── distributed_state.py   # CRDT-based state with vector clocks
+│   ├── assignment_strategy.py # Strategy for task assignment
+│   └── matrix_client.py       # Interactive client for matrix computation
+├── network/
+│   ├── peer_discovery.py      # Peer registration and bootstrap
+│   ├── peer_health.py         # Health monitoring with circuit breaker
+│   └── gossip_manager.py      # Epidemic state propagation
+├── grpc_layer/
+│   ├── matrix.proto           # gRPC/Protobuf service definitions
+│   ├── matrix_pb2.py          # Generated Protobuf code
+│   └── matrix_pb2_grpc.py     # Generated gRPC service stubs
+├── scripts/
+│   ├── run_node.py            # CLI to start a single peer node
+│   ├── start_peer_nodes.py    # Convenience script to start a local cluster
+│   └── generate_grpc.py       # Regenerate gRPC files from matrix.proto
+├── tests/
+│   └── stress_test.py         # Concurrent stress testing script
+├── requirements.txt           # Python dependencies
 └── .gitignore
 ```
 
